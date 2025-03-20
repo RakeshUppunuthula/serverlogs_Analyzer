@@ -1,0 +1,503 @@
+{% extends 'dashboard/base.html' %}
+
+{% block title %}Log Analysis Dashboard{% endblock %}
+
+{% block extra_css %}
+<style>
+    .log-entry:hover {
+        background-color: #f8f9fa;
+        cursor: pointer;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2>Log Analysis Dashboard</h2>
+        <p class="text-muted">
+            File: <strong>{{ log_file.file.name|slice:"5:" }}</strong> | 
+            Uploaded: {{ log_file.uploaded_at|date:"M d, Y H:i" }}
+        </p>
+    </div>
+    <div>
+        <a href="{% url 'home' %}" class="btn btn-outline-secondary me-2">
+            <i class="fas fa-arrow-left me-1"></i> Back
+        </a>
+        {% if log_file.excel_file %}
+            <a href="{% url 'download_excel' log_file_id=log_file.id %}" class="btn btn-success">
+                <i class="fas fa-file-excel me-1"></i> Download Excel
+            </a>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Charts -->
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card shadow-sm">
+            <div class="card-header bg-primary text-white">
+                <h5 class="card-title mb-0">Status Code Distribution</h5>
+            </div>
+            <div class="card-body">
+                <canvas id="statusChart" height="250"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card shadow-sm">
+            <div class="card-header bg-primary text-white">
+                <h5 class="card-title mb-0">HTTP Method Distribution</h5>
+            </div>
+            <div class="card-body">
+                <canvas id="methodChart" height="250"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Filters -->
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+        <h5 class="card-title mb-0">
+            <i class="fas fa-filter me-2"></i>Filter Log Entries
+        </h5>
+        <button class="btn btn-sm btn-light" type="button" data-bs-toggle="collapse" data-bs-target="#filterCollapse">
+            <i class="fas fa-chevron-down"></i>
+        </button>
+    </div>
+    <div class="collapse {% if filtered %}show{% endif %}" id="filterCollapse">
+        <div class="card-body">
+            <form method="get" action="{% url 'dashboard' log_file_id=log_file.id %}">
+                <div class="row g-3">
+                    <div class="col-md-3">
+                        <label for="id_ip_address" class="form-label">IP Address</label>
+                        {{ filter_form.ip_address }}
+                    </div>
+                    <div class="col-md-3">
+                        <label for="id_method" class="form-label">HTTP Method</label>
+                        {{ filter_form.method }}
+                    </div>
+                    <div class="col-md-3">
+                        <label for="id_status_code" class="form-label">Status Code</label>
+                        {{ filter_form.status_code }}
+                    </div>
+                    <div class="col-md-3">
+                        <label for="id_path" class="form-label">Path</label>
+                        {{ filter_form.path }}
+                    </div>
+                    <div class="col-md-3">
+                        <label for="id_start_date" class="form-label">Start Date</label>
+                        {{ filter_form.start_date }}
+                    </div>
+                    <div class="col-md-3">
+                        <label for="id_end_date" class="form-label">End Date</label>
+                        {{ filter_form.end_date }}
+                    </div>
+                    <div class="col-md-3">
+                        <label for="id_query_param" class="form-label">Query Parameter</label>
+                        <select name="query_param" id="id_query_param" class="form-control">
+                            <option value="">Any parameter</option>
+                            {% for param in param_names %}
+                                <option value="{{ param }}" {% if request.GET.query_param == param %}selected{% endif %}>
+                                    {{ param }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label for="id_query_value" class="form-label">Parameter Value</label>
+                        {{ filter_form.query_value }}
+                    </div>
+                </div>
+                <div class="mt-3">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-search me-1"></i> Apply Filters
+                    </button>
+                    <a href="{% url 'dashboard' log_file_id=log_file.id %}" class="btn btn-outline-secondary ms-2">
+                        <i class="fas fa-undo me-1"></i> Reset
+                    </a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Log Entries -->
+<div class="card shadow-sm">
+    <div class="card-header bg-primary text-white">
+        <div class="d-flex justify-content-between align-items-center">
+            <h5 class="card-title mb-0">
+                <i class="fas fa-list me-2"></i>Log Entries
+            </h5>
+            <span class="badge bg-light text-dark">
+                {{ total_entries }} entries found
+            </span>
+        </div>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover table-striped mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>IP Address</th>
+                        <th>Timestamp</th>
+                        <th>Method</th>
+                        <th>Path</th>
+                        <th>Status</th>
+                        <th>Size</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for entry in page_obj %}
+                        <tr class="log-entry" data-entry-id="{{ entry.id }}">
+                            <td>{{ entry.ip_address }}</td>
+                            <td>{{ entry.timestamp }}</td>
+                            <td>
+                                <span class="badge 
+                                    {% if entry.method == 'GET' %}bg-success
+                                    {% elif entry.method == 'POST' %}bg-primary
+                                    {% elif entry.method == 'PUT' %}bg-warning
+                                    {% elif entry.method == 'DELETE' %}bg-danger
+                                    {% else %}bg-secondary{% endif %}">
+                                    {{ entry.method }}
+                                </span>
+                            </td>
+                            <td>
+                                <span class="d-inline-block text-truncate" style="max-width: 250px;">
+                                    {{ entry.path }}
+                                </span>
+                            </td>
+                            <td>
+                                <span class="badge 
+                                    {% if entry.status_code < 300 %}bg-success
+                                    {% elif entry.status_code < 400 %}bg-info
+                                    {% elif entry.status_code < 500 %}bg-warning
+                                    {% else %}bg-danger{% endif %}">
+                                    {{ entry.status_code }}
+                                </span>
+                            </td>
+                            <td>{{ entry.response_size }} B</td>
+                        </tr>
+                    {% empty %}
+                        <tr>
+                            <td colspan="6" class="text-center py-4">
+                                <div class="text-muted mb-3">
+                                    <i class="fas fa-search fa-2x"></i>
+                                </div>
+                                <p>No log entries found matching your criteria.</p>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <!-- Pagination -->
+    {% if page_obj.paginator.num_pages > 1 %}
+        <div class="card-footer">
+            <nav aria-label="Log entry pagination">
+                <ul class="pagination justify-content-center mb-0">
+                    <!-- Previous button -->
+                    {% if page_obj.has_previous %}
+                        <li class="page-item">
+                            <a class="page-link" href="?page=1{{ request.GET.urlencode|slice:'5:' }}" aria-label="First">
+                                <span aria-hidden="true">&laquo;&laquo;</span>
+                            </a>
+                        </li>
+                        <li class="page-item">
+                            <a class="page-link" href="?page={{ page_obj.previous_page_number }}{{ request.GET.urlencode|slice:'5:' }}" aria-label="Previous">
+                                <span aria-hidden="true">&laquo;</span>
+                            </a>
+                        </li>
+                    {% else %}
+                        <li class="page-item disabled">
+                            <span class="page-link">&laquo;&laquo;</span>
+                        </li>
+                        <li class="page-item disabled">
+                            <span class="page-link">&laquo;</span>
+                        </li>
+                    {% endif %}
+                    
+                    <!-- Page numbers -->
+                    {% for num in page_obj.paginator.page_range %}
+                        {% if page_obj.number == num %}
+                            <li class="page-item active">
+                                <span class="page-link">{{ num }}</span>
+                            </li>
+                        {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
+                            <li class="page-item">
+                                <a class="page-link" href="?page={{ num }}{{ request.GET.urlencode|slice:'5:' }}">{{ num }}</a>
+                            </li>
+                        {% endif %}
+                    {% endfor %}
+                    
+                    <!-- Next button -->
+                    {% if page_obj.has_next %}
+                        <li class="page-item">
+                            <a class="page-link" href="?page={{ page_obj.next_page_number }}{{ request.GET.urlencode|slice:'5:' }}" aria-label="Next">
+                                <span aria-hidden="true">&raquo;</span>
+                            </a>
+                        </li>
+                        <li class="page-item">
+                            <a class="page-link" href="?page={{ page_obj.paginator.num_pages }}{{ request.GET.urlencode|slice:'5:' }}" aria-label="Last">
+                                <span aria-hidden="true">&raquo;&raquo;</span>
+                            </a>
+                        </li>
+                    {% else %}
+                        <li class="page-item disabled">
+                            <span class="page-link">&raquo;</span>
+                        </li>
+                        <li class="page-item disabled">
+                            <span class="page-link">&raquo;&raquo;</span>
+                        </li>
+                    {% endif %}
+                </ul>
+            </nav>
+        </div>
+    {% endif %}
+</div>
+
+<!-- Log Entry Detail Modal -->
+<div class="modal fade" id="entryDetailModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Log Entry Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <dl class="row">
+                            <dt class="col-sm-4">IP Address</dt>
+                            <dd class="col-sm-8" id="modal-ip"></dd>
+                            
+                            <dt class="col-sm-4">Timestamp</dt>
+                            <dd class="col-sm-8" id="modal-timestamp"></dd>
+                            
+                            <dt class="col-sm-4">Method</dt>
+                            <dd class="col-sm-8">
+                                <span class="badge" id="modal-method"></span>
+                            </dd>
+                            
+                            <dt class="col-sm-4">Path</dt>
+                            <dd class="col-sm-8" id="modal-path"></dd>
+                        </dl>
+                    </div>
+                    <div class="col-md-6">
+                        <dl class="row">
+                            <dt class="col-sm-4">Status Code</dt>
+                            <dd class="col-sm-8">
+                                <span class="badge" id="modal-status"></span>
+                            </dd>
+                            
+                            <dt class="col-sm-4">Size</dt>
+                            <dd class="col-sm-8" id="modal-size"></dd>
+                            
+                            <dt class="col-sm-4">User Agent</dt>
+                            <dd class="col-sm-8" id="modal-user-agent"></dd>
+                            
+                            <dt class="col-sm-4">Referrer</dt>
+                            <dd class="col-sm-8" id="modal-referrer"></dd>
+                        </dl>
+                    </div>
+                </div>
+                
+                <h6 class="border-bottom pb-2 mt-3">Query Parameters</h6>
+                <div id="modal-parameters">
+                    <div class="text-center py-3 text-muted">
+                        <i>No query parameters</i>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Chart data from the backend
+    const statusChartData = {{ status_chart_data|safe }};
+    const methodChartData = {{ method_chart_data|safe }};
+    
+    // Status code chart
+    const statusCtx = document.getElementById('statusChart').getContext('2d');
+    const statusChart = new Chart(statusCtx, {
+        type: 'bar',
+        data: {
+            labels: statusChartData.labels,
+            datasets: [{
+                label: 'Count',
+                data: statusChartData.data,
+                backgroundColor: statusChartData.labels.map(label => {
+                    const code = parseInt(label);
+                    if (code < 300) return 'rgba(40, 167, 69, 0.7)';
+                    if (code < 400) return 'rgba(23, 162, 184, 0.7)';
+                    if (code < 500) return 'rgba(255, 193, 7, 0.7)';
+                    return 'rgba(220, 53, 69, 0.7)';
+                }),
+                borderColor: statusChartData.labels.map(label => {
+                    const code = parseInt(label);
+                    if (code < 300) return 'rgb(40, 167, 69)';
+                    if (code < 400) return 'rgb(23, 162, 184)';
+                    if (code < 500) return 'rgb(255, 193, 7)';
+                    return 'rgb(220, 53, 69)';
+                }),
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: {
+                        precision: 0
+                    }
+                }
+            },
+            plugins: {
+                legend: {
+                    display: false
+                },
+                tooltip: {
+                    callbacks: {
+                        title: function(tooltipItems) {
+                            const code = parseInt(tooltipItems[0].label);
+                            let status = 'Unknown';
+                            
+                            if (code === 200) status = 'OK';
+                            else if (code === 201) status = 'Created';
+                            else if (code === 204) status = 'No Content';
+                            else if (code === 301) status = 'Moved Permanently';
+                            else if (code === 302) status = 'Found';
+                            else if (code === 304) status = 'Not Modified';
+                            else if (code === 400) status = 'Bad Request';
+                            else if (code === 401) status = 'Unauthorized';
+                            else if (code === 403) status = 'Forbidden';
+                            else if (code === 404) status = 'Not Found';
+                            else if (code === 500) status = 'Internal Server Error';
+                            else if (code === 502) status = 'Bad Gateway';
+                            else if (code === 503) status = 'Service Unavailable';
+                            
+                            return `Status ${code}: ${status}`;
+                        }
+                    }
+                }
+            }
+        }
+    });
+    
+    // Method chart
+    const methodCtx = document.getElementById('methodChart').getContext('2d');
+    const methodChart = new Chart(methodCtx, {
+        type: 'doughnut',
+        data: {
+            labels: methodChartData.labels,
+            datasets: [{
+                data: methodChartData.data,
+                backgroundColor: [
+                    'rgba(40, 167, 69, 0.7)',   // GET - green
+                    'rgba(13, 110, 253, 0.7)',  // POST - blue
+                    'rgba(255, 193, 7, 0.7)',   // PUT - yellow
+                    'rgba(220, 53, 69, 0.7)',   // DELETE - red
+                    'rgba(108, 117, 125, 0.7)'  // Others - gray
+                ],
+                borderColor: [
+                    'rgb(40, 167, 69)',
+                    'rgb(13, 110, 253)',
+                    'rgb(255, 193, 7)',
+                    'rgb(220, 53, 69)',
+                    'rgb(108, 117, 125)'
+                ],
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: {
+                    position: 'right'
+                }
+            }
+        }
+    });
+    
+    // Log entry click handler
+    document.querySelectorAll('.log-entry').forEach(entry => {
+        entry.addEventListener('click', function() {
+            const entryId = this.getAttribute('data-entry-id');
+            
+            // Fetch entry details
+            fetch(`/log-entry/${entryId}/`)
+                .then(response => response.json())
+                .then(data => {
+                    // Fill modal with data
+                    document.getElementById('modal-ip').textContent = data.ip_address;
+                    document.getElementById('modal-timestamp').textContent = data.timestamp;
+                    
+                    const methodEl = document.getElementById('modal-method');
+                    methodEl.textContent = data.method;
+                    methodEl.className = `badge ${getMethodClass(data.method)}`;
+                    
+                    document.getElementById('modal-path').textContent = data.path;
+                    
+                    const statusEl = document.getElementById('modal-status');
+                    statusEl.textContent = data.status_code;
+                    statusEl.className = `badge ${getStatusClass(data.status_code)}`;
+                    
+                    document.getElementById('modal-size').textContent = `${data.response_size} bytes`;
+                    document.getElementById('modal-user-agent').textContent = data.user_agent;
+                    document.getElementById('modal-referrer').textContent = data.referrer || '(none)';
+                    
+                    // Parameters
+                    const paramsContainer = document.getElementById('modal-parameters');
+                    if (data.parameters && data.parameters.length > 0) {
+                        let html = '<div class="table-responsive"><table class="table table-sm"><thead><tr><th>Name</th><th>Value</th></tr></thead><tbody>';
+                        
+                        data.parameters.forEach(param => {
+                            html += `<tr><td>${param.name}</td><td>${param.value}</td></tr>`;
+                        });
+                        
+                        html += '</tbody></table></div>';
+                        paramsContainer.innerHTML = html;
+                    } else {
+                        paramsContainer.innerHTML = '<div class="text-center py-3 text-muted"><i>No query parameters</i></div>';
+                    }
+                    
+                    // Show modal
+                    const modal = new bootstrap.Modal(document.getElementById('entryDetailModal'));
+                    modal.show();
+                })
+                .catch(error => {
+                    console.error('Error fetching log entry details:', error);
+                    alert('Failed to load log entry details.');
+                });
+        });
+    });
+    
+    // Helper functions for badge colors
+    function getMethodClass(method) {
+        switch (method) {
+            case 'GET': return 'bg-success';
+            case 'POST': return 'bg-primary';
+            case 'PUT': return 'bg-warning';
+            case 'DELETE': return 'bg-danger';
+            default: return 'bg-secondary';
+        }
+    }
+    
+    function getStatusClass(code) {
+        if (code < 300) return 'bg-success';
+        if (code < 400) return 'bg-info';
+        if (code < 500) return 'bg-warning';
+        return 'bg-danger';
+    }
+</script>
+{% endblock %}
